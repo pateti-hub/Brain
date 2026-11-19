@@ -546,7 +546,6 @@ def main() -> None:
             image,
             conf=confidence_threshold,
             device="cpu",
-            imgsz=imgsz,
             augment=True,
             verbose=False,
         )
@@ -557,7 +556,6 @@ def main() -> None:
                 image,
                 conf=0.05,
                 device="cpu",
-                imgsz=imgsz,
                 augment=True,
                 verbose=False,
             )
