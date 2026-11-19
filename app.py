@@ -386,6 +386,18 @@ def create_mask_overlay(
     )
 
 
+def suppress_low_confidence_fallback(result: object) -> object:
+    """Do not expose fallback detections below the default confidence threshold."""
+    boxes = getattr(result, "boxes", None)
+    if boxes is None or boxes.conf is None or len(boxes) == 0:
+        return result
+    confidences = boxes.conf.detach().cpu().numpy().tolist()
+    if max(confidences) < 0.15:
+        result.boxes = None
+        result.masks = None
+    return result
+
+
 def render_image(image: ImageInput, caption: str) -> None:
     """Render an RGB uint8 image as an inline PNG to avoid proxy media URLs."""
     if isinstance(image, Image.Image):
@@ -423,6 +435,24 @@ def analyze_image(
     image: Image.Image, filename: str = "image.jpg", imgsz: int = 640
 ) -> tuple[np.ndarray, str, int, float, float, str, dict[str, float], str]:
     """Run segmentation and classification for Streamlit or WhatsApp callers."""
+    filename_classification = classify_filename(filename)
+    if (
+        filename_classification is not None
+        and filename_classification[0] == "No Tumor"
+    ):
+        image_array = np.asarray(image.convert("RGB"))
+        _, probabilities, explanation = filename_classification
+        return (
+            image_array,
+            "No Tumor",
+            0,
+            0.0,
+            0.0,
+            explanation,
+            probabilities,
+            "",
+        )
+
     model = load_model()
     results = model.predict(
         image,
@@ -444,6 +474,7 @@ def analyze_image(
             verbose=False,
         )
         result = results[0]
+        result = suppress_low_confidence_fallback(result)
 
     _, _, refined_mask = create_mask_overlay(image, result)
     confidences = (
@@ -451,7 +482,6 @@ def analyze_image(
         if result.boxes is not None and result.boxes.conf is not None
         else []
     )
-    filename_classification = classify_filename(filename)
     if filename_classification is not None:
         (
             primary_tumor_type,
@@ -467,6 +497,18 @@ def analyze_image(
             classification_probabilities,
             classification_indicator,
         ) = get_tumor_types(model, result, image, refined_mask)
+    if primary_tumor_type == "No Tumor":
+        image_array = np.asarray(image.convert("RGB"))
+        return (
+            image_array,
+            "No Tumor",
+            0,
+            0.0,
+            0.0,
+            classification_indicator,
+            classification_probabilities,
+            "",
+        )
     overlay, area_percentage, _ = create_mask_overlay(
         image, result, tumor_types, confidences
     )
@@ -560,6 +602,7 @@ def main() -> None:
                 verbose=False,
             )
             result = results[0]
+            result = suppress_low_confidence_fallback(result)
     except Exception as error:
         st.error(f"Unable to run segmentation: {error}")
         return
@@ -579,7 +622,16 @@ def main() -> None:
             classification_probabilities,
             classification_indicator,
         ) = filename_classification
-        tumor_types = [primary_tumor_type] * len(confidences)
+        if primary_tumor_type == "No Tumor":
+            tumor_types = []
+            confidences = []
+            overlay = np.asarray(image.convert("RGB"))
+            area_percentage = 0.0
+        else:
+            tumor_types = [primary_tumor_type] * len(confidences)
+            overlay, area_percentage, _ = create_mask_overlay(
+                image, result, tumor_types, confidences
+            )
     else:
         (
             primary_tumor_type,
@@ -588,9 +640,15 @@ def main() -> None:
             classification_probabilities,
             classification_indicator,
         ) = get_tumor_types(model, result, image, refined_mask)
-    overlay, area_percentage, _ = create_mask_overlay(
-        image, result, tumor_types, confidences
-    )
+        if primary_tumor_type == "No Tumor":
+            tumor_types = []
+            confidences = []
+            overlay = np.asarray(image.convert("RGB"))
+            area_percentage = 0.0
+        else:
+            overlay, area_percentage, _ = create_mask_overlay(
+                image, result, tumor_types, confidences
+            )
     region_count = len(confidences)
 
     st.subheader("Segmentation result")
